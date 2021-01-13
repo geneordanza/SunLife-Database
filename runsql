@@ -1,0 +1,263 @@
+#!/bin/bash
+
+# Global variables
+# usage: Help message
+# main: Entry point
+
+# display_table: Container for displaying Investments/NAVPS/FundTypes tables
+# table_Investments: Show 2 views, for NetInv/ROI and for NAVPS
+# table_NAVPS:     Show NAVPS table
+# table_Clients:   Show Clients table
+# table_FundTypes: Show FundTypes table
+
+# client_table: Container for extracting client data from Investments table
+# user_table: Show Clients table, redirect to table_Clients function
+
+# latest_navps: New NAVPS and recompute some of the columns in Investments
+
+# get_all_tablenames: Show all tables in the database
+# run_script: Run SQL script (output.sql edited manually)
+# csv_export: Export Investable to investments.csv file
+# resetOutputfile: Revert to base SQLite settings
+# create_outputfile: Create the SQL commands file and pass to sqlite3
+
+# Global variables
+ARGS=$#
+SQL_DB="$HOME/test.db"
+OPSTRING="c:n:t:sger"
+OUTPUTFILE="$HOME/.bin/output.sql"
+CONFIGFILE="$HOME/.bin/settings.sql"
+
+# usage: Help message
+function usage {
+  echo
+  echo " Desc:  Database for Sun Life clients and their fund investments"
+  echo " Usage: runsql [-OPTION] [ARGUMENTS]"
+  echo " Where: Where OPTION and ARGUMENTS could be any of the following"
+  echo "        -c <client_surname> <column>    Display client table"
+  echo "        -n <fund_name> <latest_navps>   Add latest NAVPS"
+  echo "        -t <table_name> <column>        Display table with order by column"
+  echo "        -g                              Get all tables names"
+  echo "        -e                              Export Investments table"
+  echo "        -s                              Show all clients"
+  echo "        -r                              Run SQL script"
+  echo;exit 0
+}
+
+# client_table: Container for extracting client data from Investments table
+function client_table {
+  local colwidth=".w 15 11 8 10 10 7 11 8"
+  IFS=' ' read -ra strings <<< "$OPTARG"
+  local clientName="${strings[0]}"
+  local sortby="${strings[1]}"
+  local name_of_clients=('Beverly' 'Cristy' 'Jessalie' 'Cristina'
+        'Rosie')
+
+  if printf '%s\n' "${name_of_clients[@]}" | grep -q "$clientName"; then
+    echo -e "\n Client Table: $clientName"
+  else
+    echo -e "\n '$clientName' client does not exists!"
+    echo -e " Try running 'runsql -g'\n"
+    exit 0
+  fi
+
+  if [[ -z "$sortby" ]]; then
+    local orderby=";"
+  else
+    local orderby=" ORDER BY $2;"
+  fi
+
+  local select="select ApplicationID, Fund_ID, GrossInv as GrossInv,
+       printf('%.2f', Deduction) as Deduction,
+       printf('%.2f', NetInv) as 'NetInv',
+       cast(Shares as integer) as Shares,
+       printf('%.2f', FundValue) as 'FundValue',
+       printf('%.2f', ROI) as 'ROI',
+       printf('%.2f', GainLoss) as 'GainLoss'
+    from Investments
+    where Client_ID = (select Client_ID from Clients
+      where FirstName = '$clientName'
+    )"
+
+  create_outputfile "$select" "$orderby"
+
+  local colwidth=".w 15 13 13 13 8 8 15"
+  local select="select ApplicationID, TransactDate,
+        TransactType, SalesLoadType, ANAVPS, LNAVPS, SalesLoadDeduct
+    from Investments
+    where Client_ID = (select Client_ID from Clients
+      where FirstName = '$clientName'
+    )"
+
+  create_outputfile "$select" "$orderby"
+}
+
+# user_table: Show Clients table, redirect to table_Clients function
+function user_table {
+  tableName="Clients;"
+  table_Clients "$tableName"
+}
+
+# latest_navps: New NAVPS and recompute some of the columns in Investments
+function latest_navps {
+  IFS=' ' read -ra strings <<< "$OPTARG"
+  local fund_id="${strings[0]}"
+  local lnavps="${strings[1]}"
+
+  echo -e "\n Fund Type: $fund_id"
+  echo -e " Latest NAVPS: $lnavps"
+
+  local insert="INSERT INTO NAVPS (Fund_ID, LNAVPS, Note) VALUES (\"$fund_id\",
+  $lnavps, NULL);"
+
+  create_outputfile "$insert" "$orderby"
+
+# table_Investments "Investments" ";"
+}
+
+
+# display_table: Container for displaying Investments/NAVPS/FundTypes tables
+function display_table {
+  IFS=' ' read -ra strings <<< "$OPTARG"
+  local tableName="${strings[0]}"
+  local sortby="${strings[1]}"
+
+  if [[ -z "$sortby" ]]; then
+    local orderby=";"
+  else
+    local orderby=" ORDER BY $sortby;"
+  fi
+
+  case "$tableName" in
+    'NAVPS') table_NAVPS "$tableName" "$orderby";;
+    'Clients') table_Clients "$tableName" "$orderby";;
+    'FundTypes') table_FundTypes "$tableName" "$orderby";;
+    'Investments') table_Investments "$tableName" "$orderby";;
+    *) echo "Non-existent table: $tableName";;
+  esac
+}
+
+# table_Investments: Show 2 views, for NetInv/ROI and for NAVPS
+function table_Investments {
+  local colwidth=".w 10 14 11 8 10 10 7 11 8"
+  local select="select c.FirstName, i.ApplicationID, i.Fund_ID,
+       i.GrossInv as GrossInv,
+       printf('%.2f', i.Deduction) as Deduction,
+       printf('%.2f', i.NetInv) as 'NetInv',
+       cast(i.Shares as integer) as Shares,
+       printf('%.2f', i.FundValue) as 'FundValue',
+       printf('%.2f', i.ROI) as 'ROI',
+       printf('%.2f', i.GainLoss) as 'GainLoss'
+    from Investments i, Clients c
+    where i.Client_ID = c.Client_id"
+  local orderby="$2"
+
+  create_outputfile "$select" "$orderby"
+
+  local colwidth=".w 10 14 12 13 13 8 8 7"
+  local select="select c.FirstName, i.ApplicationID, i.TransactDate,
+        i.TransactType, i.SalesLoadType, i.ANAVPS, i.LNAVPS, i.SalesLoadDeduct
+    from Investments i, Clients c
+    where i.Client_ID = c.Client_id"
+
+  create_outputfile "$select" "$orderby"
+}
+
+# table_NAVPS:     Show NAVPS table
+function table_NAVPS {
+  local colwidth=".w 11 14 9 40"
+  local select="select Timestamp, Fund_ID, LNAVPS, Note from $1"
+  local orderby="$2"
+
+  create_outputfile "$select" "$orderby"
+}
+
+# table_Clients:   Show Clients table
+function table_Clients {
+  local colwidth=".w 5 12 12 20 10 10 4 25"
+  local select="select Title, FirstName, LastName, Email, Phone, Birthday, Age,
+    Address from $1"
+  local orderby="$2"
+
+  create_outputfile "$select" "$orderby"
+}
+
+# table_FundTypes: Show FundTypes table
+function table_FundTypes {
+  local colwidth=".w 12 12 8 15 50"
+  local select="select Fund_ID, Name, Minimum, Tolerance, Description
+    from $1"
+  local orderby="$2"
+
+  create_outputfile "$select" "$orderby"
+}
+
+# get_all_tablenames: Show all tables in the database
+function get_all_tablenames {
+  local select=".tables"
+  local orderby=""
+  echo
+  echo "Table Names:"
+  create_outputfile "$select" "$orderby"
+}
+
+# run_script: Run SQL script (output.sql edited manually)
+function run_script {
+  echo "Hello running run_script .."
+  echo
+  sqlite3 "$SQL_DB" < "$OUTPUTFILE"
+  echo
+}
+
+# csv_export: Export Investable to investments.csv file
+function csv_export {
+  echo ".headers on" > "$OUTPUTFILE"
+  echo ".mode csv" >> "$OUTPUTFILE"
+  echo ".output investments.csv" >> "$OUTPUTFILE"
+  echo "select * from Investments;" >> "$OUTPUTFILE"
+
+  sqlite3 "$SQL_DB" < "$OUTPUTFILE"
+}
+
+# resetOutputfile: Revert to base SQLite settings
+function resetOutputfile {
+  cp "$CONFIGFILE" "$OUTPUTFILE"
+}
+
+# create_outputfile: Create the SQL commands file and pass to sqlite3
+function create_outputfile {
+  resetOutputfile
+  local query="$1 $2"
+
+  echo "$colwidth" >> "$OUTPUTFILE"
+  echo "$query" >> "$OUTPUTFILE"
+
+  sqlite3 "$SQL_DB" < "$OUTPUTFILE"
+  echo
+}
+
+
+# main: Entry point
+function main {
+  clear
+  if [[ $ARGS -eq 0 ]]; then
+    usage; exit 1
+  fi
+
+  while getopts $OPSTRING OPTION; do
+    case ${OPTION} in
+      c) client_table ${OPTARG}; exit 0;;
+      n) latest_navps ${OPTARG}; exit 0;;
+      t) display_table ${OPTARG}; exit 0;;
+      g) get_all_tablenames; exit 0;;
+      e) csv_export; exit 0;;
+      s) user_table; exit 0;;
+      r) run_script; exit 0;;
+     \?) usage;;
+     \*) usage;;
+    esac
+  done
+}
+
+main "$@"
+
